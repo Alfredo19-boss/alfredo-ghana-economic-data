@@ -1,0 +1,40 @@
+name: Update economic model data
+# Every five minutes. Commits only when a figure, headline or rate has actually changed.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: model-sync
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Live figures
+        run: |
+          node model/tools/sync.mjs model/live.json /tmp/live.json && node model/tools/changed.mjs model/live.json /tmp/live.json && cp /tmp/live.json model/live.json || echo "No change in live figures"
+      - name: News, pictures and exchange rates
+        run: |
+          node model/tools/news.mjs /tmp/news.json && node model/tools/changed.mjs model/news.json /tmp/news.json && cp /tmp/news.json model/news.json || echo "No change in news"
+      - name: Yearly figures, about once a day
+        run: |
+          if node model/tools/due.mjs model/annual.json || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            node model/tools/annual.mjs /tmp/annual.json && cp /tmp/annual.json model/annual.json || echo "Yearly refresh failed, keeping last data"
+          fi
+      - name: Save changes
+        run: |
+          git config user.name "model-data-bot"
+          git config user.email "model-data-bot@users.noreply.github.com"
+          git add model/live.json model/annual.json model/news.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Update model data"
+          git pull --rebase origin main
+          git push
